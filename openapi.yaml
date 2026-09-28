@@ -1,0 +1,511 @@
+openapi: 3.1.0
+info:
+  title: Astria Modern Editor API
+  version: 0.1.0
+  description: JSON API for versioned isometric map projects. PNG and SQL downloads are the only non-JSON responses.
+servers:
+  - url: http://localhost:3001
+security:
+  - bearerAuth: []
+tags:
+  - name: Auth
+  - name: Maps
+  - name: Legacy
+  - name: Assets
+paths:
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Exchange username and password for an 8-hour JWT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Authenticated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, user]
+                properties:
+                  token: { type: string }
+                  user:
+                    type: object
+                    properties:
+                      sub: { type: string }
+                      role: { type: string, enum: [viewer, editor, admin] }
+        '401': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /api/auth/me:
+    get:
+      tags: [Auth]
+      summary: Return the identity and role in the current JWT
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sub: { type: string }
+                  role: { type: string, enum: [viewer, editor, admin] }
+        '401': { $ref: '#/components/responses/Error' }
+  /api/maps:
+    get:
+      tags: [Maps]
+      summary: List saved editor maps
+      responses:
+        '200':
+          description: Up to 1000 recent maps
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/MapSummary' }
+        '401': { $ref: '#/components/responses/Error' }
+    post:
+      tags: [Maps]
+      summary: Create a map and acquire its editing lease
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, subArea]
+              properties:
+                id: { type: integer, minimum: 1, maximum: 32767 }
+                width: { type: integer, minimum: 2, maximum: 100, default: 15 }
+                height: { type: integer, minimum: 2, maximum: 100, default: 17 }
+                subArea: { type: integer, description: Existing subareas.id in the emulator }
+      responses:
+        '201': { $ref: '#/components/responses/MapDocument' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/maps/{id}:
+    parameters:
+      - $ref: '#/components/parameters/MapId'
+    get:
+      tags: [Maps]
+      summary: Fetch full canonical document
+      responses:
+        '200': { $ref: '#/components/responses/MapDocument' }
+        '404': { $ref: '#/components/responses/Error' }
+    put:
+      tags: [Maps]
+      summary: Save if edit lease and expected version match
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [map, expectedVersion]
+              properties:
+                map: { $ref: '#/components/schemas/MapDocument' }
+                expectedVersion: { type: integer, minimum: 0 }
+                thumbnail: { type: string, description: PNG data URL, maxLength: 4000000 }
+                cellThumbnail: { type: string, description: Cell-mode PNG data URL, maxLength: 4000000 }
+      responses:
+        '200': { $ref: '#/components/responses/MapDocument' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '423': { $ref: '#/components/responses/Error' }
+  /api/maps/{id}/lock:
+    parameters:
+      - $ref: '#/components/parameters/MapId'
+    put:
+      tags: [Maps]
+      summary: Acquire or renew a 120-second editing lease
+      responses:
+        '200':
+          description: Lease granted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  owner: { type: string }
+                  leaseSeconds: { type: integer, const: 120 }
+        '423': { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Maps]
+      summary: Release caller's lease
+      responses:
+        '200':
+          description: Release attempted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  released: { type: boolean }
+  /api/maps/{id}/thumbnail:
+    parameters:
+      - $ref: '#/components/parameters/MapId'
+      - name: mode
+        in: query
+        schema: { type: string, enum: [normal, cell] }
+    get:
+      tags: [Maps]
+      summary: Download saved PNG thumbnail
+      responses:
+        '200':
+          description: PNG
+          content:
+            image/png:
+              schema: { type: string, format: binary }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/maps/{id}/versions:
+    parameters:
+      - $ref: '#/components/parameters/MapId'
+    get:
+      tags: [Maps]
+      summary: List recent versions
+      responses:
+        '200':
+          description: Version history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    version: { type: integer }
+                    author: { type: string }
+                    savedAt: { type: string, format: date-time }
+  /api/maps/{id}/versions/{version}:
+    parameters:
+      - $ref: '#/components/parameters/MapId'
+      - name: version
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    get:
+      tags: [Maps]
+      summary: Fetch a historical document for manual restoration
+      responses:
+        '200': { $ref: '#/components/responses/MapDocument' }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/maps/{id}/legacy-sql:
+    parameters:
+      - $ref: '#/components/parameters/MapId'
+    get:
+      tags: [Legacy]
+      summary: Download the Atlanta mapas-row SQL projection
+      responses:
+        '200':
+          description: SQL text file
+          content:
+            text/plain:
+              schema: { type: string }
+  /api/legacy/maps:
+    get:
+      tags: [Legacy]
+      summary: List DB maps that lack an editor document
+      parameters:
+        - name: q
+          in: query
+          description: Numeric map ID prefix, with an exact ID first
+          schema: { type: string, pattern: '^[0-9]{1,5}$' }
+      responses:
+        '200':
+          description: Up to 100 emulator map rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: integer }
+                    dateMap: { type: string }
+  /api/legacy/maps/{id}/import:
+    parameters:
+      - $ref: '#/components/parameters/MapId'
+    post:
+      tags: [Legacy]
+      summary: Create a canonical editor document from the existing DB row
+      responses:
+        '201': { $ref: '#/components/responses/MapDocument' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /api/legacy/swf/decode:
+    post:
+      tags: [Legacy]
+      summary: Parse a bounded Astria-generated FWS/CWS file without saving
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [data]
+              properties:
+                data: { type: string, contentEncoding: base64 }
+                filename: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/MapDocument' }
+        '400': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /api/tiles:
+    get:
+      tags: [Assets]
+      summary: Page through discovered assets and packs
+      parameters:
+        - name: type
+          in: query
+          schema: { type: integer, enum: [0, 1, 2] }
+        - name: pack
+          in: query
+          schema: { type: string }
+        - name: search
+          in: query
+          schema: { type: string }
+        - name: cursor
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 300, default: 120 }
+      responses:
+        '200':
+          description: Page and pack names
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/TileAsset' }
+                  total: { type: integer }
+                  nextCursor: { type: [integer, 'null'] }
+                  packs:
+                    type: array
+                    items: { type: string }
+  /api/tiles/rescan:
+    post:
+      tags: [Assets]
+      summary: Admin-only asset manifest rescan
+      responses:
+        '200':
+          description: Number of discovered assets
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+        '403': { $ref: '#/components/responses/Error' }
+  /api/areas:
+    get:
+      tags: [Assets]
+      summary: Area metadata from the emulator areas table
+      responses:
+        '200': { $ref: '#/components/responses/MetadataList' }
+  /api/subareas:
+    get:
+      tags: [Assets]
+      summary: Subarea metadata from the emulator subareas table
+      responses:
+        '200': { $ref: '#/components/responses/MetadataList' }
+  /api/monsters:
+    get:
+      tags: [Assets]
+      summary: Monster metadata from the emulator mobs_modelo table
+      responses:
+        '200': { $ref: '#/components/responses/MetadataList' }
+  /api/world:
+    get:
+      tags: [Maps]
+      summary: List map points for geoposition view
+      responses:
+        '200':
+          description: Up to 15000 map points from mapas
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: integer }
+                    x: { type: integer }
+                    y: { type: integer }
+                    area: { type: integer }
+                    subArea: { type: integer }
+  /api/health:
+    get:
+      security: []
+      summary: Database connectivity probe
+      responses:
+        '200':
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  parameters:
+    MapId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1, maximum: 32767 }
+  responses:
+    Error:
+      description: Error with optional details
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error: { type: string }
+              details:
+                type: array
+                items: { type: string }
+    MapDocument:
+      description: Canonical versioned map document
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/MapDocument' }
+    MetadataList:
+      description: ID and name metadata
+      content:
+        application/json:
+          schema:
+            type: array
+            items:
+              type: object
+              required: [id, name]
+              properties:
+                id: { type: integer }
+                name: { type: string }
+  schemas:
+    MapSummary:
+      type: object
+      required: [id, dateMap, version, updatedAt, thumbnailUrl]
+      properties:
+        id: { type: integer }
+        dateMap: { type: string }
+        version: { type: integer }
+        updatedAt: { type: string, format: date-time }
+        thumbnailUrl: { type: string }
+    TileAsset:
+      type: object
+      required: [id, type, pack, url, x, y]
+      properties:
+        id: { type: integer }
+        type: { type: integer, enum: [0, 1, 2] }
+        pack: { type: string }
+        url: { type: string }
+        x: { type: integer, description: Sprite draw origin from XML }
+        y: { type: integer, description: Sprite draw origin from XML }
+    TriggerTarget:
+      type: object
+      required: [mapId, cellId]
+      properties:
+        mapId: { type: integer, minimum: 1 }
+        cellId: { type: integer, minimum: 0 }
+    Cell:
+      type: object
+      required: [id, gfx1, gfx2, gfx3, unWalkable, loS, path, paddock, door, triggerCell, io, fightCell, nivSol, inclineSol, rotation, flip]
+      properties:
+        id: { type: integer, minimum: 0 }
+        gfx1: { type: [integer, 'null'] }
+        gfx2: { type: [integer, 'null'] }
+        gfx3: { type: [integer, 'null'] }
+        unWalkable: { type: boolean }
+        loS: { type: boolean }
+        path: { type: boolean }
+        paddock: { type: boolean }
+        door: { type: boolean }
+        triggerCell: { type: boolean }
+        io: { type: boolean }
+        fightCell: { type: integer, enum: [0, 1, 2] }
+        nivSol: { type: integer, minimum: 0, maximum: 15 }
+        inclineSol: { type: integer, minimum: 0, maximum: 15 }
+        rotation:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items: { type: integer, minimum: 0, maximum: 3 }
+        flip:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items: { type: boolean }
+        rawCellData: { type: string }
+        trigger: { $ref: '#/components/schemas/TriggerTarget' }
+    MapDocument:
+      type: object
+      required: [format, schemaVersion, id, dateMap, width, height, backgroundId, musicId, ambianceId, outdoor, capabilities, geoposition, combat, nextRoom, nextCell, key, cells, version, author, createdAt, updatedAt]
+      properties:
+        format: { type: string, const: astria-map }
+        schemaVersion: { type: integer, const: 1 }
+        id: { type: integer, minimum: 1, maximum: 32767 }
+        dateMap: { type: string, maxLength: 255 }
+        width: { type: integer, minimum: 2, maximum: 100 }
+        height: { type: integer, minimum: 2, maximum: 100 }
+        backgroundId: { type: [integer, 'null'] }
+        musicId: { type: integer }
+        ambianceId: { type: integer }
+        outdoor: { type: boolean }
+        capabilities: { type: integer }
+        geoposition:
+          type: object
+          required: [x, y, area, subArea, superArea]
+          properties:
+            x: { type: integer }
+            y: { type: integer }
+            area: { type: integer }
+            subArea: { type: integer }
+            superArea: { type: integer }
+        combat:
+          type: object
+          required: [nbGroups, groupMaxSize, minGroupSize, minGroupLevel, maxGroupLevel, maxMerchants, maxFights, mobs, fixedMobs, fixedCell]
+          properties:
+            nbGroups: { type: integer, minimum: 0 }
+            groupMaxSize: { type: integer, minimum: 0 }
+            minGroupSize: { type: integer, minimum: 0 }
+            minGroupLevel: { type: integer, minimum: 0 }
+            maxGroupLevel: { type: integer, minimum: 0 }
+            maxMerchants: { type: integer, minimum: 0 }
+            maxFights: { type: integer, minimum: 0, maximum: 127 }
+            mobs: { type: string }
+            fixedMobs: { type: string }
+            fixedCell: { type: [integer, 'null'] }
+        nextRoom: { type: [integer, 'null'] }
+        nextCell: { type: [integer, 'null'] }
+        key: { type: string }
+        fightPlaceSuffix: { type: string }
+        rawFightPlaces: { type: string }
+        fightPlaceBaseline: { type: string }
+        fightPlacesMalformed: { type: boolean }
+        sourceHash: { type: string, description: SHA-256 of the imported emulator rows }
+        cells:
+          type: array
+          items: { $ref: '#/components/schemas/Cell' }
+        version: { type: integer, minimum: 0 }
+        author: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }

@@ -1,0 +1,17 @@
+services:
+  editor:
+    build: .
+    ports:
+      - "127.0.0.1:3001:3001"
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL for the existing Busta static database}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD}
+      ASSET_ROOT: /app/assets/Images
+      METADATA_ROOT: /app/assets/XML
+      ASSET_BASE_URL: /tile-assets
+      HOST: 0.0.0.0
+      PORT: 3001
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
